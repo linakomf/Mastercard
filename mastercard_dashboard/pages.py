@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -12,15 +13,21 @@ import streamlit as st
 from mastercard_dashboard.config import DashboardPaths, FEATURE_LABELS, SEGMENT_LABELS
 from mastercard_dashboard.data import query_transactions
 from mastercard_dashboard.modeling import build_business_explanation, get_local_shap_explanation
-from mastercard_dashboard.ui import render_compact_kpi_row, render_kpi_row, render_page_header
+from mastercard_dashboard.ui import (
+    render_compact_kpi_row,
+    render_gauge_html,
+    render_kpi_row,
+    render_page_header,
+)
 
 
 PLOTLY_TEMPLATE = "plotly_dark"
-FINTECH_BLUE = "#2F80ED"
-FINTECH_CYAN = "#35C2FF"
-FINTECH_GREEN = "#2ECC71"
-FINTECH_RED = "#FF6B6B"
-FINTECH_ORANGE = "#F5A623"
+FINTECH_RED = "#EB001B"
+FINTECH_ORANGE = "#FF5F00"
+FINTECH_GOLD = "#F79E1B"
+FINTECH_GREEN = "#2D9F3F"
+FINTECH_BLUE = "#FF5F00"
+FINTECH_CYAN = "#F79E1B"
 
 
 def feature_label(name: str) -> str:
@@ -529,8 +536,8 @@ def render_overview_page(
                 hole=0.62,
                 color="segment",
                 color_discrete_map={
-                    "Consumer": FINTECH_BLUE,
-                    "Hidden entrepreneur (proxy)": FINTECH_ORANGE,
+                    "Consumer": FINTECH_GREEN,
+                    "Hidden entrepreneur (proxy)": FINTECH_RED,
                 },
                 template=PLOTLY_TEMPLATE,
                 title="Card portfolio structure",
@@ -566,8 +573,8 @@ def render_overview_page(
     with tab_behavior:
         fig = go.Figure()
         for column_name, label, color in [
-            ("consumer", "Consumers", FINTECH_BLUE),
-            ("hidden_entrepreneur", "Hidden entrepreneurs (proxy)", FINTECH_ORANGE),
+            ("consumer", "Consumers", FINTECH_GREEN),
+            ("hidden_entrepreneur", "Hidden entrepreneurs (proxy)", FINTECH_RED),
         ]:
             fig.add_trace(
                 go.Bar(
@@ -613,8 +620,8 @@ def render_overview_page(
             barmode="overlay",
             opacity=0.65,
             color_discrete_map={
-                "Consumer": FINTECH_BLUE,
-                "Hidden entrepreneur (proxy)": FINTECH_ORANGE,
+                "Consumer": FINTECH_GREEN,
+                "Hidden entrepreneur (proxy)": FINTECH_RED,
             },
             template=PLOTLY_TEMPLATE,
             title="Hidden entrepreneur probability distribution",
@@ -739,13 +746,86 @@ def render_card_profile_page(
             )
 
     st.markdown("### 2. Entrepreneur likelihood")
-    render_compact_kpi_row(
-        [
-            ("Score", f"{card_record['entrepreneur_probability']:.1%}", "Hidden entrepreneur likelihood"),
-            ("Predicted class", card_record["predicted_label"], "Threshold = 0.50"),
-            ("Confidence", f"{confidence:.1%}", confidence_label(confidence)),
+
+    prob_pct = int(round(float(card_record["entrepreneur_probability"]) * 100))
+    is_entrepreneur = int(card_record["predicted_class"]) == 1
+    badge_cls = "danger" if is_entrepreneur else "safe"
+    badge_text = "⚠ ALERT" if is_entrepreneur else "✓ OK"
+    label_color = "#EB001B" if is_entrepreneur else "#2D9F3F"
+
+    col_gauge, col_info, col_metrics = st.columns([1, 1.1, 1.1], gap="medium")
+
+    with col_gauge:
+        st.markdown(
+            f'<div class="kpi-card" style="text-align:center;">'
+            f'<div class="kpi-card-label">Entrepreneur probability</div>'
+            f'{render_gauge_html(prob_pct)}'
+            f'<div style="margin-top:10px;">'
+            f'<span class="danger-badge {badge_cls}">{badge_text}</span>'
+            f'</div>'
+            f'<div style="margin-top:8px;font-size:13px;font-weight:600;color:{label_color};">'
+            f'{escape(str(card_record["predicted_label"]))}'
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    with col_info:
+        info_rows = [
+            ("Predicted segment", escape(str(card_record["predicted_label"]))),
+            ("Confidence", f"{confidence:.1%}"),
+            ("Confidence level", escape(confidence_label(confidence))),
+            ("Online ratio", f"{float(card_record['online_ratio']):.1%}"),
+            ("Recurring ratio", f"{float(card_record['recurring_ratio']):.1%}"),
+            ("International ratio", f"{float(card_record['international_ratio']):.1%}"),
         ]
-    )
+        rows_html = "".join(
+            f'<div style="display:flex;justify-content:space-between;padding:8px 0;'
+            f'border-bottom:1px solid rgba(255,255,255,0.04);font-size:13px;">'
+            f'<span style="color:#888;">{k}</span>'
+            f'<span style="font-weight:600;color:#e8e8f0;">{v}</span>'
+            f"</div>"
+            for k, v in info_rows
+        )
+        st.markdown(
+            f'<div class="kpi-card">'
+            f'<div class="kpi-card-label">Card information</div>'
+            f"{rows_html}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    with col_metrics:
+        txn_count = int(card_record["txn_count"])
+        unique_merchants = int(card_record["unique_merchants"])
+        online_pct = int(float(card_record["online_ratio"]) * 100)
+        recurring_pct = int(float(card_record["recurring_ratio"]) * 100)
+        avg_per_day = round(float(card_record["avg_txn_per_day"]), 1)
+
+        mini_items = [
+            ("Transactions", txn_count, max(txn_count, 1000), "#FF5F00"),
+            ("Unique merchants", unique_merchants, max(unique_merchants, 400), "#EB001B"),
+            ("Online %", online_pct, 100, "#F79E1B"),
+            ("Recurring %", recurring_pct, 100, "#FF5F00"),
+            ("Avg txn / day", avg_per_day, max(avg_per_day, 20), "#EB001B"),
+        ]
+        bars_html = "".join(
+            f'<div style="margin-bottom:11px;">'
+            f'<div style="font-size:12px;color:#888;margin-bottom:3px;">{lbl}</div>'
+            f'<div style="display:flex;align-items:center;gap:8px;">'
+            f'<div style="flex:1;height:6px;border-radius:3px;background:#1a1a2e;">'
+            f'<div style="width:{min(100, (val / mx) * 100):.1f}%;height:100%;border-radius:3px;background:{col};"></div>'
+            f"</div>"
+            f'<span style="font-size:12px;color:#aaa;font-family:\'Space Mono\',monospace;min-width:44px;text-align:right;">{val}</span>'
+            f"</div></div>"
+            for lbl, val, mx, col in mini_items
+        )
+        st.markdown(
+            f'<div class="kpi-card">'
+            f'<div class="kpi-card-label">Key metrics</div>'
+            f"{bars_html}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("### 3. Transactions")
     if transactions.empty:
