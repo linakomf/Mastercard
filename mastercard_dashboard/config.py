@@ -47,6 +47,10 @@ MODEL_FEATURE_COLUMNS = [
     "unique_countries",
     "avg_txn_per_day",
     "recurring_capable_ratio",
+    "b2b_mcc_ratio",
+    "amount_cv",
+    "days_since_last_tx",
+    "business_hours_ratio",
 ]
 
 FEATURE_LABELS = {
@@ -69,6 +73,10 @@ FEATURE_LABELS = {
     "unique_countries": "Unique countries",
     "avg_txn_per_day": "Average transactions per day",
     "recurring_capable_ratio": "Recurring-capable merchant ratio",
+    "b2b_mcc_ratio": "B2B MCC share",
+    "amount_cv": "Amount coefficient of variation",
+    "days_since_last_tx": "Days since last transaction",
+    "business_hours_ratio": "Business hours share (9–18)",
 }
 
 SEGMENT_LABELS = {
@@ -103,6 +111,7 @@ class DashboardPaths:
     shap_summary_path: Path
     local_explanations_path: Path
     business_report_path: Path
+    submission_path: Path
 
 
 def discover_paths() -> DashboardPaths:
@@ -130,4 +139,5 @@ def discover_paths() -> DashboardPaths:
         shap_summary_path=artifact_dir / "xgboost_shap_summary.png",
         local_explanations_path=artifact_dir / "xgboost_local_explanations.csv",
         business_report_path=artifact_dir / "business_report.md",
+        submission_path=artifact_dir / "submission.csv",
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -11,14 +12,30 @@ import streamlit as st
 
 from mastercard_dashboard.config import DashboardPaths, FEATURE_LABELS, SEGMENT_LABELS
 from mastercard_dashboard.data import query_transactions
-from mastercard_dashboard.modeling import build_business_explanation, get_local_shap_explanation
-from mastercard_dashboard.ui import render_compact_kpi_row, render_kpi_row, render_page_header
+from mastercard_dashboard.modeling import (
+    PATTERN_TOP_PERCENTILE,
+    build_business_explanation,
+    get_local_shap_explanation,
+    get_pattern_cards_ranked,
+    get_pattern_portfolio_stats,
+    load_submission_scores,
+)
+from mastercard_dashboard.ui import (
+    render_card_kpi_strip,
+    render_card_score_panel,
+    render_compact_kpi_row,
+    render_geo_spend_list,
+    render_kpi_row,
+    render_merchant_purchase_list,
+    render_page_header,
+    render_section_heading,
+)
 
 
 PLOTLY_TEMPLATE = "plotly_dark"
 FINTECH_BLUE = "#2F80ED"
 FINTECH_CYAN = "#35C2FF"
-FINTECH_GREEN = "#2ECC71"
+FINTECH_GREEN = "#FF6B6B"
 FINTECH_RED = "#FF6B6B"
 FINTECH_ORANGE = "#F5A623"
 
@@ -76,6 +93,24 @@ def build_segment_comparison_frame(feature_summary: pd.DataFrame) -> pd.DataFram
 
 def format_kzt(value: float) -> str:
     return f"{value:,.0f} KZT".replace(",", " ")
+
+
+def format_kzt_compact(value: float) -> str:
+    amount = float(value)
+    if amount >= 1_000_000:
+        compact = amount / 1_000_000
+        text = f"{compact:.1f}M".replace(".0M", "M")
+        return f"{text} KZT"
+    if amount >= 1_000:
+        return f"{amount / 1_000:.0f}K KZT"
+    return format_kzt(amount)
+
+
+def merchant_initials(name: str) -> str:
+    cleaned = "".join(char for char in str(name) if char.isalnum())
+    if len(cleaned) >= 2:
+        return cleaned[:2].upper()
+    return str(name)[:2].upper()
 
 
 def format_int(value: float) -> str:
@@ -262,6 +297,13 @@ def build_business_summary(card_record: pd.Series, transactions: pd.DataFrame) -
     return summary, badges
 
 
+def mask_card_number(card_number: str) -> str:
+    card = str(card_number)
+    if len(card) <= 8:
+        return card
+    return f"{card[:4]} •••• {card[-4:]}"
+
+
 def render_badges(badges: list[str]) -> None:
     if not badges:
         return
@@ -287,6 +329,71 @@ def confidence_label(confidence: float) -> str:
     if confidence >= 0.65:
         return "Medium"
     return "Borderline"
+
+
+def consumer_display_score(consumers: pd.DataFrame, card_number: str, card_record: pd.Series) -> float:
+    consumer_row = consumers.loc[consumers["card_number"] == card_number]
+    if not consumer_row.empty:
+        return float(consumer_row.iloc[0]["display_score"])
+    return float(card_record["entrepreneur_probability"])
+
+
+def consumer_score_metrics(display_score: float) -> tuple[float, float, str]:
+    score_pct = display_score * 100
+    certainty = max(display_score, 1.0 - display_score)
+    return score_pct, certainty * 100, confidence_label(certainty)
+
+
+def resolve_selected_card(
+    filtered_cards: pd.DataFrame,
+    state_key: str,
+    fallback_card: str,
+) -> str:
+    available = filtered_cards["card_number"].astype(str).tolist()
+    selected = str(st.session_state.get(state_key, fallback_card))
+    if selected not in available:
+        selected = fallback_card
+        st.session_state[state_key] = selected
+    return selected
+
+
+SEGMENT_LIST_LIMIT = 250
+
+
+def render_card_purchases_by_merchant(transactions: pd.DataFrame, selected_card: str) -> None:
+    st.markdown(
+        f'<h3 class="section-heading">Where they shopped</h3>'
+        f'<p class="section-hint">Card {escape(mask_card_number(selected_card))}</p>',
+        unsafe_allow_html=True,
+    )
+
+    if transactions.empty:
+        st.info("No transactions for this card.")
+        return
+
+    by_merchant = (
+        transactions.groupby("merchant_name", dropna=False)
+        .agg(
+            tx_count=("transaction_amount_kzt", "size"),
+            amount_kzt=("transaction_amount_kzt", "sum"),
+            countries=("country", lambda values: ", ".join(sorted({str(v) for v in values if pd.notna(v)})[:4])),
+        )
+        .reset_index()
+        .sort_values(["amount_kzt", "tx_count"], ascending=[False, False])
+    )
+
+    rows = []
+    for record in by_merchant.itertuples(index=False):
+        countries = str(record.countries) if pd.notna(record.countries) and record.countries else "—"
+        rows.append(
+            {
+                "initials": merchant_initials(record.merchant_name),
+                "name": str(record.merchant_name),
+                "meta": f"{countries} · {int(record.tx_count)} tx",
+                "amount": format_kzt_compact(float(record.amount_kzt)),
+            }
+        )
+    render_merchant_purchase_list(rows)
 
 
 def top_merchant_examples(transactions: pd.DataFrame, limit: int = 3) -> str:
@@ -637,56 +744,92 @@ def render_card_profile_page(
     model_bundle: dict[str, Any],
     paths: DashboardPaths,
 ) -> None:
-    render_page_header(
-        "Card",
-        "Compact investigation view with transaction flow, score signals, and merchant analytics.",
-    )
+    portfolio_stats = get_pattern_portfolio_stats(model_bundle, paths)
+    pattern_count = int(portfolio_stats["pattern_count"])
+    regular_count = int(portfolio_stats["regular_count"])
+    top_pct = int(PATTERN_TOP_PERCENTILE * 100)
 
-    st.markdown("### 1. Card selection")
+    scored_cards = model_bundle["scored_cards"].copy()
+    scored_cards["card_number"] = scored_cards["card_number"].astype(str)
+    consumers = scored_cards.loc[scored_cards["target"] == 0].copy()
+    pattern_ids = portfolio_stats["pattern_card_ids"]
 
-    scored_cards = model_bundle["scored_cards"].sort_values(
-        ["entrepreneur_probability", "card_number"], ascending=[False, True]
-    )
+    if paths.submission_path.exists():
+        score_lookup = load_submission_scores(str(paths.submission_path))
+        consumers = consumers.merge(score_lookup, on="card_number", how="left")
+        consumers["display_score"] = consumers["score"].fillna(consumers["entrepreneur_probability"])
+    else:
+        consumers["display_score"] = consumers["entrepreneur_probability"]
+
     segment_options = {
-        "All cards": None,
-        "Flagged hidden entrepreneurs": 1,
-        "Regular consumers": 0,
+        "pattern": f"Pattern · {pattern_count:,}",
+        "regular": f"Regular · {regular_count:,}",
+        "all": f"All consumer · {len(consumers):,}",
     }
-    filter_col, card_col = st.columns([1, 1.8], gap="large")
-    with filter_col:
-        segment_filter = st.selectbox(
-            "Portfolio segment",
-            list(segment_options.keys()),
-            index=0,
-            key="card_segment_filter",
-        )
+    segment_frames = {
+        "pattern": consumers.loc[consumers["card_number"].isin(pattern_ids)],
+        "regular": consumers.loc[~consumers["card_number"].isin(pattern_ids)],
+        "all": consumers,
+    }
 
-    selected_class = segment_options[segment_filter]
-    filtered_cards = (
-        scored_cards.copy()
-        if selected_class is None
-        else scored_cards.loc[scored_cards["predicted_class"] == selected_class].copy()
+    segment_key = st.radio(
+        "Segment",
+        options=list(segment_options.keys()),
+        format_func=lambda key: segment_options[key],
+        horizontal=True,
+        key="card_segment_filter",
+        label_visibility="collapsed",
     )
-    available_card_numbers = filtered_cards["card_number"].astype(str).tolist()
 
-    if not available_card_numbers:
-        st.warning("No cards are available for the selected segment.")
+    filtered_cards = (
+        segment_frames[segment_key]
+        .sort_values(["display_score", "card_number"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+    if filtered_cards.empty:
+        st.warning("No cards in the selected segment.")
         return
 
     card_selection_key = "card_profile_selected_card"
-    if st.session_state.get(card_selection_key) not in available_card_numbers:
-        st.session_state[card_selection_key] = available_card_numbers[0]
+    segment_card_ids = filtered_cards["card_number"].astype(str).tolist()
+    if st.session_state.get("card_profile_prev_segment") != segment_key:
+        st.session_state[card_selection_key] = segment_card_ids[0]
+        st.session_state["card_profile_prev_segment"] = segment_key
 
-    with card_col:
-        selected_card = st.selectbox(
-            "Select card number",
-            available_card_numbers,
-            key=card_selection_key,
-        )
+    try:
+        pattern_cards_ranked = get_pattern_cards_ranked(model_bundle, paths)
+    except Exception as exc:
+        st.error(f"Failed to load scores: {exc}")
+        pattern_cards_ranked = pd.DataFrame()
 
-    card_frame = scored_cards.loc[scored_cards["card_number"] == selected_card].copy()
-    card_record = card_frame.iloc[0]
-    confidence = compute_prediction_confidence(card_record)
+    if segment_key == "pattern" and not pattern_cards_ranked.empty:
+        list_frame = pattern_cards_ranked.copy()
+    else:
+        list_frame = filtered_cards.head(SEGMENT_LIST_LIMIT).copy()
+        list_frame["#"] = range(1, len(list_frame) + 1)
+        list_frame["pattern_pct"] = (list_frame["display_score"] * 100).round(1)
+
+    default_card = str(list_frame.iloc[0]["card_number"])
+
+    table_frame = list_frame.copy()
+    if "pattern_pct" not in table_frame.columns:
+        table_frame["pattern_pct"] = (table_frame["display_score"] * 100).round(1)
+    table_view = table_frame.rename(
+        columns={"card_number": "Card number", "pattern_pct": "Score, %"}
+    )
+    rank_column = "#" if "#" in table_view.columns else "№"
+    table_view = table_view[[rank_column, "Card number", "Score, %"]].copy()
+
+    selected_card = resolve_selected_card(filtered_cards, card_selection_key, default_card)
+    card_matches = scored_cards.loc[scored_cards["card_number"] == selected_card]
+    if card_matches.empty:
+        st.warning("Card not found.")
+        return
+
+    card_record = card_matches.iloc[0]
+    is_pattern = selected_card in pattern_ids
+    display_score = consumer_display_score(consumers, selected_card, card_record)
+    score_pct, confidence_pct, confidence_text = consumer_score_metrics(display_score)
 
     transactions = query_transactions(
         paths=paths,
@@ -700,237 +843,165 @@ def render_card_profile_page(
         min_tx_date = transactions["transaction_timestamp"].min().normalize()
         max_tx_date = transactions["transaction_timestamp"].max().normalize()
         default_date_range = (min_tx_date.date(), max_tx_date.date())
-        with st.sidebar:
-            st.markdown("### Card profile filters")
+        with st.expander("Period filters", expanded=False):
             profile_date_range = st.date_input(
-                "Card period",
+                "Period",
                 value=default_date_range,
                 min_value=min_tx_date.date(),
                 max_value=max_tx_date.date(),
+                key="card_profile_date_range",
             )
-            profile_merchants = st.multiselect(
-                "Merchant",
-                options=sorted(transactions["merchant_name"].dropna().astype(str).unique().tolist()),
-            )
-            profile_mcc = st.multiselect(
-                "MCC category",
-                options=sorted(transactions["mcc_label"].dropna().astype(str).unique().tolist()),
-            )
-            profile_countries = st.multiselect(
-                "Country",
-                options=sorted(transactions["country"].dropna().astype(str).unique().tolist()),
-            )
-            profile_channels = st.multiselect(
-                "Online / offline",
-                options=["Online", "Offline"],
-                default=["Online", "Offline"],
-            )
-
         if len(profile_date_range) == 2:
             profile_start = pd.Timestamp(profile_date_range[0])
             profile_end = pd.Timestamp(profile_date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
             transactions = apply_card_profile_filters(
                 transactions=transactions,
                 date_range=(profile_start, profile_end),
-                merchants=profile_merchants,
-                mcc_labels=profile_mcc,
-                countries=profile_countries,
-                channels=profile_channels,
+                merchants=[],
+                mcc_labels=[],
+                countries=[],
+                channels=[],
             )
 
-    st.markdown("### 2. Entrepreneur likelihood")
-    render_compact_kpi_row(
+    render_card_kpi_strip(
         [
-            ("Score", f"{card_record['entrepreneur_probability']:.1%}", "Hidden entrepreneur likelihood"),
-            ("Predicted class", card_record["predicted_label"], "Threshold = 0.50"),
-            ("Confidence", f"{confidence:.1%}", confidence_label(confidence)),
+            ("Pattern cards", f"{pattern_count:,}", f"top {top_pct}% consumer"),
+            ("Probability", f"{score_pct:.1f}%", "hidden entrepreneur"),
+            ("Confidence", f"{confidence_pct:.1f}%", confidence_text.lower()),
+            ("Transactions", f"{len(transactions):,}", "in period"),
         ]
     )
 
-    st.markdown("### 3. Transactions")
-    if transactions.empty:
-        st.info("No transactions were found for this card.")
-    else:
-        st.dataframe(
-            transactions[
-                [
-                    "transaction_timestamp",
-                    "merchant_name",
-                    "transaction_amount_kzt",
-                    "mcc_label",
-                    "country",
-                    "channel_label",
-                    "is_recurring",
-                ]
-            ].rename(
-                columns={
-                    "transaction_timestamp": "Date",
-                    "merchant_name": "Merchant",
-                    "transaction_amount_kzt": "Amount (KZT)",
-                    "mcc_label": "MCC category",
-                    "country": "Country",
-                    "channel_label": "Channel",
-                    "is_recurring": "Recurring",
-                }
-            ),
+    list_col, profile_col = st.columns([1.55, 1], gap="large")
+    with list_col:
+        render_section_heading("Card ranking", "Click a row to open the card profile.")
+        table_selection = st.dataframe(
+            table_view,
             use_container_width=True,
             hide_index=True,
-            height=380,
-        )
-
-    st.markdown("### 4. Card analytics")
-    if transactions.empty:
-        st.info("Not enough data is available to build charts for this card.")
-    else:
-        daily_amount = (
-            transactions.assign(tx_day=transactions["transaction_timestamp"].dt.floor("D"))
-            .groupby("tx_day")["transaction_amount_kzt"]
-            .sum()
-            .reset_index()
-        )
-        weekday_map = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
-        weekday_breakdown = (
-            transactions.assign(weekday=transactions["transaction_timestamp"].dt.dayofweek)
-            .groupby("weekday")
-            .size()
-            .reindex(range(7), fill_value=0)
-            .reset_index(name="Transactions")
-        )
-        weekday_breakdown["weekday_label"] = weekday_breakdown["weekday"].map(weekday_map)
-        top_merchants = (
-            transactions.groupby("merchant_name")["transaction_amount_kzt"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(6)
-            .reset_index()
-        )
-        top_merchants["merchant_short"] = top_merchants["merchant_name"].map(
-            lambda value: truncate_label(str(value), 14)
-        )
-        top_countries = (
-            transactions.groupby("country")["transaction_amount_kzt"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(6)
-            .reset_index()
-        )
-        top_countries["country_short"] = top_countries["country"].map(
-            lambda value: truncate_label(str(value), 12)
-        )
-        analytics_tab, merchant_tab, drilldown_tab = st.tabs(
-            ["Behavior", "Merchant analytics", "Drill-down"]
-        )
-
-        with analytics_tab:
-            chart_1, chart_2 = st.columns(2, gap="medium")
-            with chart_1:
-                fig = px.line(
-                    daily_amount,
-                    x="tx_day",
-                    y="transaction_amount_kzt",
-                    template=PLOTLY_TEMPLATE,
-                    title="Daily amount trend",
-                    markers=False,
-                )
-                fig.update_traces(line_color=FINTECH_CYAN)
-                fig.update_layout(
-                    height=250,
-                    xaxis_title="Date",
-                    yaxis_title="Amount",
-                    margin=dict(l=10, r=10, t=45, b=10),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-            with chart_2:
-                fig = px.bar(
-                    weekday_breakdown,
-                    x="weekday_label",
-                    y="Transactions",
-                    template=PLOTLY_TEMPLATE,
-                    title="Activity by weekday",
-                    color_discrete_sequence=[FINTECH_ORANGE],
-                )
-                fig.update_layout(
-                    height=250,
-                    xaxis_title="Day",
-                    yaxis_title="Transactions",
-                    margin=dict(l=10, r=10, t=45, b=10),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-        with merchant_tab:
-            chart_3, chart_4 = st.columns(2, gap="medium")
-            with chart_3:
-                fig = px.bar(
-                    top_merchants.sort_values("transaction_amount_kzt"),
-                    x="transaction_amount_kzt",
-                    y="merchant_short",
-                    orientation="h",
-                    template=PLOTLY_TEMPLATE,
-                    title="Merchant analytics",
-                    color_discrete_sequence=[FINTECH_GREEN],
-                )
-                fig.update_layout(
-                    height=250,
-                    xaxis_title="Amount",
-                    yaxis_title="Merchant",
-                    margin=dict(l=10, r=10, t=45, b=10),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-            with chart_4:
-                fig = px.bar(
-                    top_countries.sort_values("transaction_amount_kzt"),
-                    x="transaction_amount_kzt",
-                    y="country_short",
-                    orientation="h",
-                    template=PLOTLY_TEMPLATE,
-                    title="Spending geography",
-                    color_discrete_sequence=[FINTECH_BLUE],
-                )
-                fig.update_layout(
-                    height=250,
-                    xaxis_title="Amount",
-                    yaxis_title="Country",
-                    margin=dict(l=10, r=10, t=45, b=10),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-
-        with drilldown_tab:
-            merchant_options = sorted(transactions["merchant_name"].dropna().astype(str).unique().tolist())
-            selected_merchant = st.selectbox("Merchant drill-down", merchant_options, index=0)
-            merchant_transactions = transactions.loc[
-                transactions["merchant_name"] == selected_merchant
-            ].copy()
-            st.caption(
-                f"Showing all transactions for merchant `{selected_merchant}` on the selected card."
-            )
-            st.dataframe(
-                merchant_transactions[
-                    [
-                        "transaction_timestamp",
-                        "merchant_name",
-                        "transaction_amount_kzt",
-                        "mcc_label",
-                        "country",
-                        "channel_label",
-                        "is_recurring",
-                    ]
-                ].rename(
-                    columns={
-                        "transaction_timestamp": "Date",
-                        "merchant_name": "Merchant",
-                        "transaction_amount_kzt": "Amount (KZT)",
-                        "mcc_label": "MCC category",
-                        "country": "Country",
-                        "channel_label": "Channel",
-                        "is_recurring": "Recurring",
-                    }
+            height=420,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="card_list_table",
+            column_config={
+                "Score, %": st.column_config.ProgressColumn(
+                    "Score, %",
+                    format="%.1f%%",
+                    min_value=0,
+                    max_value=100,
                 ),
-                use_container_width=True,
-                hide_index=True,
-                height=320,
-            )
+            },
+        )
+        if table_selection.selection.rows:
+            selected_row = table_selection.selection.rows[0]
+            st.session_state[card_selection_key] = str(table_frame.iloc[selected_row]["card_number"])
+
+    with profile_col:
+        render_card_score_panel(
+            card_masked=mask_card_number(selected_card),
+            score_pct=score_pct,
+            is_pattern=is_pattern,
+            predicted_label=str(card_record["predicted_label"]),
+            confidence_pct=confidence_pct,
+            confidence_text=confidence_text,
+        )
+
+    if transactions.empty:
+        st.info("Not enough transactions for charts and merchant list.")
+        return
+
+    monthly_amount = (
+        transactions.assign(tx_month=transactions["transaction_timestamp"].dt.to_period("M").dt.to_timestamp())
+        .groupby("tx_month")["transaction_amount_kzt"]
+        .sum()
+        .reset_index()
+        .sort_values("tx_month")
+    )
+    monthly_amount["month_label"] = monthly_amount["tx_month"].dt.strftime("%b")
+    period_start = transactions["transaction_timestamp"].min()
+    period_end = transactions["transaction_timestamp"].max()
+    period_label = f"{period_start.strftime('%b %Y')} — {period_end.strftime('%b %Y')}"
+
+    weekday_map = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+    weekday_breakdown = (
+        transactions.assign(weekday=transactions["transaction_timestamp"].dt.dayofweek)
+        .groupby("weekday")
+        .size()
+        .reindex(range(7), fill_value=0)
+        .reset_index(name="Transactions")
+    )
+    weekday_breakdown["weekday_label"] = weekday_breakdown["weekday"].map(weekday_map)
+
+    top_countries = (
+        transactions.groupby("country")["transaction_amount_kzt"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(6)
+        .reset_index()
+    )
+    geo_rows = [
+        {
+            "country": str(row.country),
+            "amount_value": float(row.transaction_amount_kzt),
+            "amount_label": format_kzt_compact(float(row.transaction_amount_kzt)),
+        }
+        for row in top_countries.itertuples(index=False)
+    ]
+
+    chart_top_left, chart_top_right = st.columns(2, gap="medium")
+    with chart_top_left:
+        st.markdown(
+            f'<p class="chart-card-title">Monthly spend</p><p class="chart-card-subtitle">{escape(period_label)}</p>',
+            unsafe_allow_html=True,
+        )
+        fig = px.line(
+            monthly_amount,
+            x="month_label",
+            y="transaction_amount_kzt",
+            template=PLOTLY_TEMPLATE,
+            markers=True,
+        )
+        fig.update_traces(line_color=FINTECH_CYAN, marker=dict(size=7, color=FINTECH_CYAN))
+        fig.update_layout(
+            height=280,
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_title="",
+            yaxis_title="",
+            showlegend=False,
+        )
+        fig.update_yaxes(tickformat="~s")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with chart_top_right:
+        st.markdown(
+            '<p class="chart-card-title">Activity by weekday</p><p class="chart-card-subtitle">Transaction count</p>',
+            unsafe_allow_html=True,
+        )
+        fig = px.bar(
+            weekday_breakdown,
+            x="weekday_label",
+            y="Transactions",
+            template=PLOTLY_TEMPLATE,
+            color_discrete_sequence=[FINTECH_ORANGE],
+        )
+        fig.update_layout(
+            height=280,
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_title="",
+            yaxis_title="",
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    _, chart_geo_col = st.columns([1, 1], gap="medium")
+    with chart_geo_col:
+        st.markdown(
+            '<p class="chart-card-title">Spending geography</p><p class="chart-card-subtitle">Amount in KZT</p>',
+            unsafe_allow_html=True,
+        )
+        render_geo_spend_list(geo_rows)
+
+    render_card_purchases_by_merchant(transactions, str(selected_card))
 
 
 def render_transactions_page(

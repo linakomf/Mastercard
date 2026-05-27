@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 import streamlit as st
@@ -14,6 +15,22 @@ from mastercard_dashboard.config import (
     MODEL_FEATURE_COLUMNS,
     TRANSACTION_COLUMNS,
 )
+
+
+def is_b2b_mcc(mcc: str) -> bool:
+    try:
+        code = int(str(mcc).strip())
+    except (ValueError, TypeError):
+        return False
+    b2b_ranges = (
+        (1500, 2999),
+        (4000, 4799),
+        (5000, 5599),
+        (7300, 7399),
+        (7800, 7999),
+        (8700, 8999),
+    )
+    return any(low <= code <= high for low, high in b2b_ranges)
 
 
 def detect_format(path: Path) -> str:
@@ -101,10 +118,13 @@ def prepare_transaction_frame(
     prepared["is_international"] = (
         ~prepared["country"].str.lower().eq("kazakhstan")
     ).astype("int8")
+    prepared["is_b2b_mcc"] = prepared["mcc"].map(is_b2b_mcc).astype("int8")
+    prepared["is_business_hour"] = prepared["tx_hour"].between(9, 18).astype("int8")
     return prepared
 
 
 def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
+    reference_ts = transactions["transaction_timestamp"].max()
     observed_days = (
         transactions.groupby("card_number")["tx_day"]
         .agg(["min", "max"])
@@ -113,6 +133,9 @@ def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
     observed_days["observed_days"] = (
         (observed_days["last_tx_day"] - observed_days["first_tx_day"]).dt.days + 1
     ).clip(lower=1)
+
+    last_tx_ts = transactions.groupby("card_number")["transaction_timestamp"].max()
+    days_since_last_tx = (reference_ts - last_tx_ts).dt.days.clip(lower=0)
 
     grouped = transactions.groupby("card_number").agg(
         target=("target", "max"),
@@ -135,6 +158,8 @@ def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
         unique_countries=("country", "nunique"),
         active_days=("tx_day", "nunique"),
         recurring_capable_ratio=("recurring_capable", "mean"),
+        b2b_mcc_ratio=("is_b2b_mcc", "mean"),
+        business_hours_ratio=("is_business_hour", "mean"),
     )
 
     top_merchant = (
@@ -148,11 +173,14 @@ def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
     )
 
     features = grouped.join(observed_days["observed_days"]).join(top_merchant)
+    features = features.join(days_since_last_tx.rename("days_since_last_tx"))
     features["std_amount"] = features["std_amount"].fillna(0.0)
     features["top_merchant_ratio"] = (
         features["top_merchant_txn_count"] / features["txn_count"].clip(lower=1)
     )
     features["avg_txn_per_day"] = features["txn_count"] / features["observed_days"].clip(lower=1)
+    features["amount_cv"] = features["std_amount"] / features["avg_amount"].clip(lower=1.0)
+    features["amount_cv"] = features["amount_cv"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return features.drop(columns=["top_merchant_txn_count"]).reset_index()
 
 
@@ -187,9 +215,16 @@ def load_dashboard_data(paths: DashboardPaths) -> dict[str, Any]:
     merchant_ref = load_merchant_reference(paths.merchant_path)
     eda_summary = load_eda_summary(paths.eda_summary_path)
 
+    missing_columns: list[str] = []
     if paths.card_features_path.exists():
         card_features = pd.read_parquet(paths.card_features_path)
+        missing_columns = [
+            column for column in MODEL_FEATURE_COLUMNS if column not in card_features.columns
+        ]
     else:
+        card_features = build_card_features_from_raw(paths)
+
+    if missing_columns:
         card_features = build_card_features_from_raw(paths)
 
     card_features = card_features.copy()

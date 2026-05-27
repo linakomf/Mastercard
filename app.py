@@ -15,6 +15,7 @@ from mastercard_dashboard.pages import (
 from mastercard_dashboard.ui import (
     apply_fintech_theme,
     render_data_sources,
+    render_sidebar_brand,
 )
 
 
@@ -47,6 +48,7 @@ def build_paths(
         shap_summary_path=artifact_root / "xgboost_shap_summary.png",
         local_explanations_path=artifact_root / "xgboost_local_explanations.csv",
         business_report_path=artifact_root / "business_report.md",
+        submission_path=artifact_root / "submission.csv",
     )
 
 
@@ -57,25 +59,6 @@ def main() -> None:
     consumer_path = str(defaults.consumer_path)
     merchant_path = str(defaults.merchant_path)
     artifact_dir = str(defaults.artifact_dir)
-
-    with st.sidebar:
-        st.title("Mastercard")
-        st.caption("Hidden Entrepreneur Detection")
-
-        page_name = st.radio(
-            "Navigation",
-            options=[
-                "Card",
-                "Transactions",
-                "SHAP",
-            ],
-            index=0,
-        )
-
-        if st.button("Reload dashboard data"):
-            st.cache_data.clear()
-            st.cache_resource.clear()
-            st.rerun()
 
     paths = build_paths(
         business_path=business_path,
@@ -98,6 +81,23 @@ def main() -> None:
 
     dashboard_data = load_dashboard_data(paths)
     model_bundle = train_model_bundle(dashboard_data["card_features"])
+
+    with st.sidebar:
+        render_sidebar_brand()
+        page_name = st.radio(
+            "Navigation",
+            options=[
+                "Card",
+                "Transactions",
+                "SHAP",
+            ],
+            index=0,
+            label_visibility="collapsed",
+        )
+        if st.button("Reload dashboard data"):
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.rerun()
 
     if page_name == "Card":
         render_card_profile_page(dashboard_data, model_bundle, paths)

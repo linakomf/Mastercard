@@ -22,10 +22,18 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
 
-from mastercard_dashboard.config import FEATURE_LABELS, MODEL_FEATURE_COLUMNS
+from mastercard_dashboard.config import FEATURE_LABELS, MODEL_FEATURE_COLUMNS, DashboardPaths
 
+PATTERN_TOP_PERCENTILE = 0.01
 
 RANDOM_STATE = 42
+
+
+@st.cache_data(show_spinner=False)
+def load_submission_scores(submission_path: str) -> pd.DataFrame:
+    scores = pd.read_csv(submission_path)[["card_number", "score"]]
+    scores["card_number"] = scores["card_number"].astype(str)
+    return scores
 
 
 def build_models(scale_pos_weight: float) -> dict[str, Pipeline]:
@@ -86,8 +94,75 @@ def build_models(scale_pos_weight: float) -> dict[str, Pipeline]:
     }
 
 
+def get_pattern_portfolio_stats(
+    model_bundle: dict[str, Any],
+    paths: DashboardPaths,
+    top_percentile: float = PATTERN_TOP_PERCENTILE,
+) -> dict[str, int | float]:
+    scored = model_bundle["scored_cards"].copy()
+    scored["card_number"] = scored["card_number"].astype(str)
+    consumers = scored.loc[scored["target"] == 0].copy()
+
+    if paths.submission_path.exists():
+        scores = load_submission_scores(str(paths.submission_path))
+    else:
+        scores = consumers[["card_number", "entrepreneur_probability"]].rename(
+            columns={"entrepreneur_probability": "score"}
+        )
+
+    scores = scores.sort_values(["score", "card_number"], ascending=[False, True]).reset_index(drop=True)
+    pattern_slots = max(int(len(scores) * top_percentile), 1)
+    threshold = float(scores.iloc[pattern_slots - 1]["score"])
+    pattern_ids = set(
+        scores.loc[scores["score"] >= threshold, "card_number"].astype(str).tolist()
+    )
+
+    return {
+        "total_cards": int(len(scored)),
+        "total_consumer": int(len(consumers)),
+        "total_business": int((scored["target"] == 1).sum()),
+        "pattern_count": int(len(pattern_ids)),
+        "regular_count": int(len(consumers) - len(pattern_ids)),
+        "pattern_threshold": threshold,
+        "pattern_card_ids": pattern_ids,
+    }
+
+
+def get_pattern_cards_ranked(
+    model_bundle: dict[str, Any],
+    paths: DashboardPaths,
+) -> pd.DataFrame:
+    stats = get_pattern_portfolio_stats(model_bundle, paths)
+    pattern_ids = stats["pattern_card_ids"]
+
+    if paths.submission_path.exists():
+        scores = load_submission_scores(str(paths.submission_path))
+    else:
+        scores = (
+            model_bundle["scored_cards"]
+            .loc[model_bundle["scored_cards"]["target"] == 0, ["card_number", "entrepreneur_probability"]]
+            .rename(columns={"entrepreneur_probability": "score"})
+        )
+
+    scores["card_number"] = scores["card_number"].astype(str)
+    ranked = (
+        scores.loc[scores["card_number"].isin(pattern_ids)]
+        .sort_values(["score", "card_number"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+    ranked.insert(0, "№", range(1, len(ranked) + 1))
+    ranked["pattern_pct"] = (ranked["score"] * 100).round(2)
+    return ranked
+
+
 @st.cache_resource(show_spinner="Preparing dashboard insights...")
 def train_model_bundle(card_features: pd.DataFrame) -> dict[str, Any]:
+    missing = [column for column in MODEL_FEATURE_COLUMNS if column not in card_features.columns]
+    if missing:
+        raise ValueError(
+            f"Missing model features: {missing}. Run scripts/mastercard_hidden_entrepreneur_pipeline.py first."
+        )
+
     modeling_frame = card_features.copy().set_index("card_number")
     X = modeling_frame[MODEL_FEATURE_COLUMNS]
     y = modeling_frame["target"]

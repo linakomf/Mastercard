@@ -18,13 +18,15 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
+    auc,
     confusion_matrix,
     f1_score,
+    precision_recall_curve,
     precision_score,
     recall_score,
     roc_auc_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
@@ -55,8 +57,15 @@ BASE_FEATURE_COLUMNS = [
     "avg_txn_per_day",
 ]
 
-ENRICHED_FEATURE_COLUMNS = ["recurring_capable_ratio"]
+ENRICHED_FEATURE_COLUMNS = [
+    "recurring_capable_ratio",
+    "b2b_mcc_ratio",
+    "amount_cv",
+    "days_since_last_tx",
+    "business_hours_ratio",
+]
 MODEL_FEATURE_COLUMNS = BASE_FEATURE_COLUMNS + ENRICHED_FEATURE_COLUMNS
+CV_FOLDS = 5
 
 TRANSACTION_COLUMNS = [
     "transaction_date",
@@ -72,6 +81,23 @@ TRANSACTION_COLUMNS = [
     "tokenized",
     "is_recurring",
 ]
+
+
+def is_b2b_mcc(mcc: str) -> bool:
+    """B2B-oriented MCC ranges: wholesale, utilities, business/professional services."""
+    try:
+        code = int(str(mcc).strip())
+    except (ValueError, TypeError):
+        return False
+    b2b_ranges = (
+        (1500, 2999),
+        (4000, 4799),
+        (5000, 5599),
+        (7300, 7399),
+        (7800, 7999),
+        (8700, 8999),
+    )
+    return any(low <= code <= high for low, high in b2b_ranges)
 
 
 def parse_args() -> argparse.Namespace:
@@ -127,8 +153,24 @@ def save_json(data: dict[str, Any], path: Path) -> None:
         json.dump(to_builtin(data), file, indent=2, ensure_ascii=False)
 
 
+def read_table(path: str, columns: list[str] | None = None) -> pd.DataFrame:
+    file_path = Path(path)
+    if file_path.suffix.lower() == ".csv":
+        return pd.read_csv(file_path, usecols=columns, low_memory=False)
+    return pd.read_parquet(file_path, columns=columns)
+
+
 def load_merchant_reference(merchant_path: str) -> pd.DataFrame:
-    merchant_ref = pd.read_parquet(merchant_path)
+    merchant_ref = read_table(
+        merchant_path,
+        columns=[
+            "merchant_id",
+            "merchant_name",
+            "mcc",
+            "merchant_country",
+            "recurring_capable",
+        ],
+    )
     merchant_ref = merchant_ref.rename(columns={"mcc": "merchant_ref_mcc"})
     merchant_ref = merchant_ref.drop_duplicates(subset=["merchant_id"]).copy()
     merchant_ref["recurring_capable"] = merchant_ref["recurring_capable"].fillna(False).astype(bool)
@@ -143,7 +185,7 @@ def load_and_prepare_transactions(
     segment_name: str,
     merchant_ref: pd.DataFrame,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    raw = pd.read_parquet(data_path, columns=TRANSACTION_COLUMNS).copy()
+    raw = read_table(data_path, columns=TRANSACTION_COLUMNS).copy()
     raw["target"] = target
     raw["segment_name"] = segment_name
 
@@ -152,9 +194,11 @@ def load_and_prepare_transactions(
     non_positive_amounts = int((prepared["transaction_amount_kzt"] <= 0).sum())
     prepared = prepared.loc[prepared["transaction_amount_kzt"] > 0].copy()
 
-    prepared["transaction_date"] = pd.to_datetime(prepared["transaction_date"], errors="coerce")
+    prepared["transaction_date"] = pd.to_datetime(
+        prepared["transaction_date"], errors="coerce", dayfirst=True
+    )
     prepared["transaction_timestamp"] = pd.to_datetime(
-        prepared["transaction_timestamp"], errors="coerce"
+        prepared["transaction_timestamp"], errors="coerce", dayfirst=True
     )
     missing_timestamps = int(prepared["transaction_timestamp"].isna().sum())
     prepared = prepared.dropna(subset=["transaction_timestamp", "card_number", "merchant_id"]).copy()
@@ -179,6 +223,8 @@ def load_and_prepare_transactions(
     prepared["is_international"] = (
         ~prepared["country"].str.lower().eq("kazakhstan")
     ).astype("int8")
+    prepared["is_b2b_mcc"] = prepared["mcc"].map(is_b2b_mcc).astype("int8")
+    prepared["is_business_hour"] = prepared["tx_hour"].between(9, 18).astype("int8")
 
     quality = {
         "segment": segment_name,
@@ -202,6 +248,8 @@ def load_and_prepare_transactions(
 
 
 def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
+    reference_ts = transactions["transaction_timestamp"].max()
+
     observation_days = (
         transactions.groupby("card_number")["tx_day"].agg(["min", "max"]).rename(
             columns={"min": "first_tx_day", "max": "last_tx_day"}
@@ -210,6 +258,9 @@ def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
     observation_days["observed_days"] = (
         (observation_days["last_tx_day"] - observation_days["first_tx_day"]).dt.days + 1
     ).clip(lower=1)
+
+    last_tx_ts = transactions.groupby("card_number")["transaction_timestamp"].max()
+    days_since_last_tx = (reference_ts - last_tx_ts).dt.days.clip(lower=0)
 
     grouped = transactions.groupby("card_number").agg(
         target=("target", "max"),
@@ -232,6 +283,8 @@ def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
         unique_countries=("country", "nunique"),
         active_days=("tx_day", "nunique"),
         recurring_capable_ratio=("recurring_capable", "mean"),
+        b2b_mcc_ratio=("is_b2b_mcc", "mean"),
+        business_hours_ratio=("is_business_hour", "mean"),
     )
 
     top_merchant_ratio = (
@@ -250,6 +303,9 @@ def build_card_features(transactions: pd.DataFrame) -> pd.DataFrame:
     )
     features["avg_txn_per_day"] = features["txn_count"] / features["observed_days"].clip(lower=1)
     features["std_amount"] = features["std_amount"].fillna(0.0)
+    features["amount_cv"] = features["std_amount"] / features["avg_amount"].clip(lower=1.0)
+    features["amount_cv"] = features["amount_cv"].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    features = features.join(days_since_last_tx.rename("days_since_last_tx"))
     features = features.drop(columns=["top_merchant_txn_count"])
     return features.reset_index()
 
@@ -612,6 +668,182 @@ def build_business_signal_table(feature_summary: pd.DataFrame) -> pd.DataFrame:
     return signal_df
 
 
+def run_cross_validation(
+    features: pd.DataFrame,
+) -> pd.DataFrame:
+    modeling_frame = features.set_index("card_number").copy()
+    X = modeling_frame[MODEL_FEATURE_COLUMNS]
+    y = modeling_frame["target"]
+    scale_pos_weight = float((y == 0).sum() / max((y == 1).sum(), 1))
+    xgb_pipeline = build_models(scale_pos_weight=scale_pos_weight)[PRIMARY_MODEL_NAME]
+
+    cv = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+    cv_results = cross_validate(
+        xgb_pipeline,
+        X,
+        y,
+        cv=cv,
+        scoring=["roc_auc", "precision", "recall", "f1"],
+        n_jobs=-1,
+    )
+    return pd.DataFrame(
+        {
+            "fold": range(1, CV_FOLDS + 1),
+            "roc_auc": cv_results["test_roc_auc"],
+            "precision": cv_results["test_precision"],
+            "recall": cv_results["test_recall"],
+            "f1_score": cv_results["test_f1"],
+        }
+    )
+
+
+def plot_precision_recall_curve(
+    evaluation_context: dict[str, Any],
+    output_dir: Path,
+) -> pd.DataFrame:
+    predictions = evaluation_context["predictions"][PRIMARY_MODEL_NAME]
+    y_test = predictions["actual_target"].values
+    probabilities = predictions["predicted_probability"].values
+
+    precision, recall, thresholds = precision_recall_curve(y_test, probabilities)
+    pr_auc = auc(recall, precision)
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(recall, precision, linewidth=2, label=f"XGBoost (PR-AUC={pr_auc:.4f})")
+    plt.axhline(y_test.mean(), color="gray", linestyle="--", label="Baseline (positive rate)")
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title("Precision-Recall Curve (hold-out 20%)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_dir / "precision_recall_curve.png", dpi=200)
+    plt.close()
+
+    threshold_rows: list[dict[str, Any]] = []
+    for threshold in [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
+        predicted = (probabilities >= threshold).astype(int)
+        threshold_rows.append(
+            {
+                "threshold": threshold,
+                "precision": precision_score(y_test, predicted, zero_division=0),
+                "recall": recall_score(y_test, predicted, zero_division=0),
+                "f1_score": f1_score(y_test, predicted, zero_division=0),
+            }
+        )
+    threshold_df = pd.DataFrame(threshold_rows)
+    threshold_df.to_csv(output_dir / "threshold_tuning.csv", index=False, encoding="utf-8-sig")
+    return threshold_df
+
+
+def fit_final_model(features: pd.DataFrame) -> Pipeline:
+    """Train on all labeled cards: business=1, consumer=0 (proxy labels)."""
+    modeling_frame = features.set_index("card_number").copy()
+    X = modeling_frame[MODEL_FEATURE_COLUMNS]
+    y = modeling_frame["target"]
+    scale_pos_weight = float((y == 0).sum() / max((y == 1).sum(), 1))
+    pipeline = build_models(scale_pos_weight=scale_pos_weight)[PRIMARY_MODEL_NAME]
+    pipeline.fit(X, y)
+    return pipeline
+
+
+def build_top_suspicious_shap_table(
+    final_model: Pipeline,
+    consumer_features: pd.DataFrame,
+    top_n: int = 100,
+) -> pd.DataFrame:
+    """Top consumer cards by score with dominant SHAP feature (pattern signal)."""
+    consumer_only = consumer_features.loc[consumer_features["target"] == 0].copy()
+    consumer_only["card_number"] = consumer_only["card_number"].astype(str)
+    X = consumer_only.set_index("card_number")[MODEL_FEATURE_COLUMNS]
+    scores = final_model.predict_proba(X)[:, 1]
+    ranked = (
+        pd.DataFrame({"card_number": X.index, "score": scores})
+        .sort_values(["score", "card_number"], ascending=[False, True])
+        .head(top_n)
+        .reset_index(drop=True)
+    )
+
+    X_top = X.loc[ranked["card_number"]]
+    imputer = final_model.named_steps["imputer"]
+    model = final_model.named_steps["model"]
+    X_imputed = pd.DataFrame(
+        imputer.transform(X_top),
+        columns=X_top.columns,
+        index=X_top.index,
+    )
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer(X_imputed)
+
+    rows: list[dict[str, Any]] = []
+    for row_idx, card_number in enumerate(X_imputed.index):
+        contributions = shap_values.values[row_idx]
+        top_idx = int(np.abs(contributions).argmax())
+        top_feature = MODEL_FEATURE_COLUMNS[top_idx]
+        top_shap = float(contributions[top_idx])
+        rows.append(
+            {
+                "card_number": str(card_number),
+                "score": float(ranked.iloc[row_idx]["score"]),
+                "top_shap_feature": top_feature,
+                "top_shap_value": top_shap,
+                "pattern_type": (
+                    "hidden_entrepreneur_pattern"
+                    if top_shap > 0
+                    else "consumer_pattern"
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def export_pattern_consumer_cards(
+    final_model: Pipeline,
+    consumer_features: pd.DataFrame,
+    output_dir: Path,
+    top_percentile: float = 0.01,
+) -> pd.DataFrame:
+    """Consumer cards with hidden-entrepreneur pattern (top scores among retail cards)."""
+    consumer_only = consumer_features.loc[consumer_features["target"] == 0].copy()
+    consumer_only["card_number"] = consumer_only["card_number"].astype(str)
+    X = consumer_only.set_index("card_number")[MODEL_FEATURE_COLUMNS]
+    scores = final_model.predict_proba(X)[:, 1]
+
+    ranked = (
+        pd.DataFrame({"card_number": X.index, "score": scores})
+        .sort_values(["score", "card_number"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+    cutoff_rank = max(int(len(ranked) * top_percentile), 1)
+    threshold = float(ranked.iloc[cutoff_rank - 1]["score"])
+    ranked["is_pattern"] = ranked["score"] >= threshold
+    ranked["pattern_rank"] = ranked.index + 1
+
+    pattern_only = ranked.loc[ranked["is_pattern"]].copy()
+    ranked.to_csv(output_dir / "consumer_scores_ranked.csv", index=False, encoding="utf-8-sig")
+    pattern_only.to_csv(output_dir / "pattern_consumers.csv", index=False, encoding="utf-8-sig")
+    return pattern_only
+
+
+def generate_submission(
+    final_model: Pipeline,
+    consumer_features: pd.DataFrame,
+    output_dir: Path,
+) -> pd.DataFrame:
+    """Score only consumer cards — one row per card_number."""
+    consumer_only = consumer_features.loc[consumer_features["target"] == 0].copy()
+    X_consumer = consumer_only.set_index("card_number")[MODEL_FEATURE_COLUMNS]
+    scores = final_model.predict_proba(X_consumer)[:, 1]
+
+    submission = pd.DataFrame(
+        {
+            "card_number": X_consumer.index.astype(str),
+            "score": np.clip(scores, 0.0, 1.0),
+        }
+    ).sort_values("card_number")
+    submission.to_csv(output_dir / "submission.csv", index=False, encoding="utf-8-sig")
+    return submission
+
+
 def write_business_report(
     output_dir: Path,
     quality_summary: dict[str, Any],
@@ -771,11 +1003,21 @@ def main() -> None:
     features = pd.concat([business_features, consumer_features], ignore_index=True)
 
     features.to_parquet(output_dir / "card_level_features.parquet", index=False)
+
     plot_class_balance(features, output_dir)
     plot_key_feature_distributions(features, output_dir)
 
     feature_summary = compute_feature_summary(features)
     feature_summary.to_csv(output_dir / "feature_summary_by_segment.csv", encoding="utf-8-sig")
+
+    cv_df = run_cross_validation(features)
+    cv_df.to_csv(output_dir / "cv_5fold_metrics.csv", index=False, encoding="utf-8-sig")
+    cv_summary = {
+        "roc_auc_mean": float(cv_df["roc_auc"].mean()),
+        "roc_auc_std": float(cv_df["roc_auc"].std()),
+        "f1_mean": float(cv_df["f1_score"].mean()),
+        "f1_std": float(cv_df["f1_score"].std()),
+    }
 
     metrics_df, evaluation_context = evaluate_models(
         features=features,
@@ -791,9 +1033,13 @@ def main() -> None:
     )
     metrics_df.to_csv(output_dir / "model_comparison.csv", index=False, encoding="utf-8-sig")
 
+    threshold_df = plot_precision_recall_curve(evaluation_context, output_dir)
     plot_confusion_matrix_for_primary_model(metrics_df, evaluation_context, output_dir)
     importance = plot_feature_importance(evaluation_context, output_dir)
     importance.to_csv(output_dir / "xgboost_feature_importance.csv", encoding="utf-8-sig")
+
+    final_model = fit_final_model(features)
+    submission = generate_submission(final_model, consumer_features, output_dir)
 
     explanations_df, shap_summary_path = generate_shap_outputs(evaluation_context, output_dir)
 
@@ -802,23 +1048,31 @@ def main() -> None:
         "consumer": consumer_quality,
         "final_card_dataset": {
             "rows": int(len(features)),
+            "business_cards": int((features["target"] == 1).sum()),
+            "consumer_cards": int((features["target"] == 0).sum()),
             "target_rate": round(float(features["target"].mean()), 4),
             "feature_columns_used": MODEL_FEATURE_COLUMNS,
             "decision_threshold": args.decision_threshold,
             "primary_model": PRIMARY_MODEL_NAME,
+            "cv_folds": CV_FOLDS,
+            "cv_summary": cv_summary,
+            "submission_rows": int(len(submission)),
+            "submission_score_min": round(float(submission["score"].min()), 6),
+            "submission_score_max": round(float(submission["score"].max()), 6),
         },
         "generated_files": {
             "features": str(output_dir / "card_level_features.parquet"),
-            "metrics": str(output_dir / "model_comparison.csv"),
-            "confusion_matrix": str(output_dir / "xgboost_confusion_matrix.png"),
-            "feature_importance_plot": str(output_dir / "xgboost_feature_importance.png"),
-            "feature_importance_csv": str(output_dir / "xgboost_feature_importance.csv"),
+            "submission": str(output_dir / "submission.csv"),
+            "cv_metrics": str(output_dir / "cv_5fold_metrics.csv"),
+            "threshold_tuning": str(output_dir / "threshold_tuning.csv"),
             "shap_summary_plot": str(shap_summary_path),
             "local_explanations": str(output_dir / "xgboost_local_explanations.csv"),
-            "business_report": str(output_dir / "business_report.md"),
+            "feature_summary": str(output_dir / "feature_summary_by_segment.csv"),
+            "eda_summary": str(output_dir / "eda_summary.json"),
         },
     }
     save_json(quality_summary, output_dir / "eda_summary.json")
+
     write_business_report(
         output_dir=output_dir,
         quality_summary=quality_summary,
@@ -832,12 +1086,18 @@ def main() -> None:
     print("Pipeline completed successfully.")
     print(f"Artifacts saved to: {output_dir.resolve()}")
     print(
-        f"{PRIMARY_MODEL_NAME} metrics -> "
+        f"{PRIMARY_MODEL_NAME} hold-out -> "
         f"precision={best_model_row['precision']:.4f}, "
         f"recall={best_model_row['recall']:.4f}, "
         f"f1={best_model_row['f1_score']:.4f}, "
         f"roc_auc={best_model_row['roc_auc']:.4f}"
     )
+    print(
+        f"5-fold CV ROC-AUC: {cv_summary['roc_auc_mean']:.4f} "
+        f"(+/- {cv_summary['roc_auc_std']:.4f})"
+    )
+    print(f"submission.csv rows: {len(submission):,} (consumer cards only)")
+    print(threshold_df.to_string(index=False))
 
 
 if __name__ == "__main__":

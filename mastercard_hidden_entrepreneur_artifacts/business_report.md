@@ -8,7 +8,7 @@ Build an explainable, production-friendly classifier that flags whether a card b
 Business cards were used as proxy positive labels and consumer cards as proxy negative labels.
 
 ## 2. Data and cleaning
-- Observation window: 2025-10-01 00:00:00 to 2026-03-31 23:59:53
+- Observation window: 2025-10-01 00:00:00 to 2026-03-31 23:59:00
 - Business transactions: 2,997,593
 - Consumer transactions: 9,832,487
 - Business cards: 25,000
@@ -41,17 +41,17 @@ Additional explainable enrichment after merge:
 ## 5. Model comparison
 ```
               model  precision  recall  f1_score  roc_auc    tn  fp  fn   tp
-      Random Forest     1.0000  0.9998    0.9999      1.0 16000   0   1 4999
+      Random Forest     1.0000  1.0000    1.0000      1.0 16000   0   0 5000
 Logistic Regression     0.9996  1.0000    0.9998      1.0 15998   2   0 5000
-            XGBoost     0.9998  0.9992    0.9995      1.0 15999   1   4 4996
+            XGBoost     0.9996  0.9994    0.9995      1.0 15998   2   3 4997
 ```
 
 ## 6. Primary model: XGBoost
-- Precision: 0.9998
-- Recall: 0.9992
+- Precision: 0.9996
+- Recall: 0.9994
 - F1-score: 0.9995
 - ROC-AUC: 1.0000
-- Confusion matrix: TN=15999, FP=1, FN=4, TP=4996
+- Confusion matrix: TN=15998, FP=2, FN=3, TP=4997
 
 ## 7. Business meaning of model errors
 - False Positive: a normal consumer is flagged as entrepreneur. Business impact: unnecessary outreach, friction, or over-monitoring.
@@ -98,11 +98,11 @@ Card: `5486023773118595`
 - Predicted probability: 1.0000
 - Actual label: 1
 - Predicted label: 1
-- `tokenized_ratio`=0.6140, SHAP=4.1100, pushes_to_hidden_entrepreneur
-- `online_ratio`=0.9123, SHAP=2.3245, pushes_to_hidden_entrepreneur
-- `avg_transaction_hour`=11.4386, SHAP=2.2903, pushes_to_hidden_entrepreneur
-- `weekend_activity_ratio`=0.1404, SHAP=1.3436, pushes_to_hidden_entrepreneur
-- `top_merchant_ratio`=0.3596, SHAP=0.5689, pushes_to_hidden_entrepreneur
+- `tokenized_ratio`=0.6140, SHAP=3.8752, pushes_to_hidden_entrepreneur
+- `online_ratio`=0.9123, SHAP=2.4349, pushes_to_hidden_entrepreneur
+- `avg_transaction_hour`=11.4386, SHAP=2.2494, pushes_to_hidden_entrepreneur
+- `weekend_activity_ratio`=0.1404, SHAP=1.4556, pushes_to_hidden_entrepreneur
+- `top_merchant_ratio`=0.3596, SHAP=0.5516, pushes_to_hidden_entrepreneur
 
 ## 11. Presentation storyline ideas
 1. Start from the business problem: consumer cards used for business-like spend create pricing and servicing blind spots.
