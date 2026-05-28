@@ -33,11 +33,11 @@ from mastercard_dashboard.ui import (
 
 
 PLOTLY_TEMPLATE = "plotly_dark"
-FINTECH_BLUE = "#2F80ED"
-FINTECH_CYAN = "#35C2FF"
-FINTECH_GREEN = "#FF6B6B"
-FINTECH_RED = "#FF6B6B"
-FINTECH_ORANGE = "#F5A623"
+FINTECH_BLUE = "#FF5F00"    # Mastercard orange — primary accent
+FINTECH_CYAN = "#F79E1B"    # Mastercard gold — secondary accent
+FINTECH_GREEN = "#2D9F3F"   # consumer / safe
+FINTECH_RED = "#EB001B"     # hidden entrepreneur / alert
+FINTECH_ORANGE = "#FF5F00"  # Mastercard orange
 
 
 def feature_label(name: str) -> str:
@@ -636,8 +636,8 @@ def render_overview_page(
                 hole=0.62,
                 color="segment",
                 color_discrete_map={
-                    "Consumer": FINTECH_BLUE,
-                    "Hidden entrepreneur (proxy)": FINTECH_ORANGE,
+                    "Consumer": FINTECH_GREEN,
+                    "Hidden entrepreneur (proxy)": FINTECH_RED,
                 },
                 template=PLOTLY_TEMPLATE,
                 title="Card portfolio structure",
@@ -660,7 +660,7 @@ def render_overview_page(
                 template=PLOTLY_TEMPLATE,
                 title="Top hidden entrepreneur drivers",
                 color="importance",
-                color_continuous_scale=["#123B6D", FINTECH_CYAN],
+                color_continuous_scale=["#2a0a0a", FINTECH_RED],
             )
             fig.update_layout(
                 coloraxis_showscale=False,
@@ -720,8 +720,8 @@ def render_overview_page(
             barmode="overlay",
             opacity=0.65,
             color_discrete_map={
-                "Consumer": FINTECH_BLUE,
-                "Hidden entrepreneur (proxy)": FINTECH_ORANGE,
+                "Consumer": FINTECH_GREEN,
+                "Hidden entrepreneur (proxy)": FINTECH_RED,
             },
             template=PLOTLY_TEMPLATE,
             title="Hidden entrepreneur probability distribution",
@@ -961,7 +961,7 @@ def render_card_profile_page(
             template=PLOTLY_TEMPLATE,
             markers=True,
         )
-        fig.update_traces(line_color=FINTECH_CYAN, marker=dict(size=7, color=FINTECH_CYAN))
+        fig.update_traces(line_color=FINTECH_ORANGE, marker=dict(size=7, color=FINTECH_ORANGE))
         fig.update_layout(
             height=280,
             margin=dict(l=10, r=10, t=10, b=10),
@@ -1266,7 +1266,7 @@ def render_model_insights_page(
             template=PLOTLY_TEMPLATE,
             title="Feature importance",
             color="importance",
-            color_continuous_scale=["#123B6D", FINTECH_CYAN],
+            color_continuous_scale=["#2a0a0a", FINTECH_RED],
         )
         fig.update_layout(
             coloraxis_showscale=False,
@@ -1342,7 +1342,7 @@ def render_model_insights_page(
             color="model",
             template=PLOTLY_TEMPLATE,
             title="ROC curve comparison",
-            color_discrete_sequence=[FINTECH_CYAN, FINTECH_GREEN, FINTECH_ORANGE],
+            color_discrete_sequence=[FINTECH_RED, FINTECH_ORANGE, FINTECH_CYAN],
         )
         fig.add_shape(
             type="line",
@@ -1410,7 +1410,7 @@ def render_shap_page(
                 template=PLOTLY_TEMPLATE,
                 title="Global SHAP signal ranking",
                 color="mean_shap",
-                color_continuous_scale=[FINTECH_RED, "#6E7B91", FINTECH_GREEN],
+                color_continuous_scale=[FINTECH_GREEN, "#6E7B91", FINTECH_RED],
                 custom_data=["mentions"],
             )
             fig.update_traces(

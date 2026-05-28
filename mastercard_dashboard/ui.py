@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from html import escape
 from pathlib import Path
 
@@ -13,41 +14,47 @@ def apply_fintech_theme() -> None:
     st.markdown(
         """
         <style>
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,700&family=Space+Mono:wght@400;700&display=swap');
+
+        * { box-sizing: border-box; }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0d0d1a; }
+        ::-webkit-scrollbar-thumb { background: #2a2a40; border-radius: 3px; }
+
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes slideRight {
+            from { opacity: 0; transform: translateX(-30px); }
+            to   { opacity: 1; transform: translateX(0); }
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(235,0,27,0.4); }
+            50%       { box-shadow: 0 0 0 8px rgba(235,0,27,0); }
+        }
+
         .stApp {
-            background:
-                radial-gradient(circle at top right, rgba(0, 163, 255, 0.08), transparent 28%),
-                linear-gradient(180deg, #08111f 0%, #0e1728 100%);
-            font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+            background: #0a0a14;
+            font-family: 'DM Sans', 'Segoe UI', Roboto, Arial, sans-serif;
         }
-        .stApp button,
-        .stApp input,
-        .stApp textarea,
-        .stApp select,
-        .stApp label,
-        .stApp p,
-        .stApp li,
-        .stApp a,
-        .stApp h1,
-        .stApp h2,
-        .stApp h3,
-        .stApp h4,
-        .stApp h5,
-        .stApp h6 {
-            font-family: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+        .stApp button, .stApp input, .stApp textarea, .stApp select,
+        .stApp label, .stApp p, .stApp li, .stApp a,
+        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {
+            font-family: 'DM Sans', 'Segoe UI', Roboto, Arial, sans-serif;
         }
-        .material-icons,
-        .material-icons-round,
-        .material-icons-outlined,
-        .material-symbols-rounded,
-        .material-symbols-outlined,
-        [class*="material-symbol"],
-        [class*="material-icons"] {
+
+        .material-icons, .material-icons-round, .material-icons-outlined,
+        .material-symbols-rounded, .material-symbols-outlined,
+        [class*="material-symbol"], [class*="material-icons"] {
             display: none !important;
             visibility: hidden !important;
         }
+
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0a1324 0%, #111c31 100%);
-            border-right: 1px solid rgba(255, 255, 255, 0.08);
+            background: #0d0d1a;
+            border-right: 1px solid rgba(255,255,255,0.04);
             min-width: 300px !important;
             max-width: 300px !important;
             position: relative !important;
@@ -96,6 +103,7 @@ def apply_fintech_theme() -> None:
             transform: translateX(0) !important;
             margin-left: 0 !important;
         }
+
         header,
         [role="banner"],
         [data-testid="stHeader"],
@@ -108,10 +116,8 @@ def apply_fintech_theme() -> None:
             height: 0 !important;
             min-height: 0 !important;
         }
-        #MainMenu,
-        footer {
-            visibility: hidden;
-        }
+        #MainMenu, footer { visibility: hidden; }
+
         [data-testid="collapsedControl"],
         [data-testid="collapsedControl"] *,
         [data-testid="stSidebarNavCollapseButton"],
@@ -136,34 +142,57 @@ def apply_fintech_theme() -> None:
             margin: 0 !important;
             overflow: hidden !important;
         }
+
         div[data-testid="metric-container"] {
-            background: rgba(16, 26, 44, 0.82);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(145deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             padding: 12px 14px;
             border-radius: 16px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
         }
+        div[data-testid="metric-container"]::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #EB001B, #FF5F00, #F79E1B);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        div[data-testid="metric-container"]:hover::before { opacity: 1; }
+        div[data-testid="metric-container"]:hover { border-color: rgba(255,95,0,0.3); transform: translateY(-2px); }
         div[data-testid="metric-container"] label {
-            color: #9cb0d8 !important;
+            color: #888 !important;
             font-size: 0.84rem !important;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
         }
         div[data-testid="metric-container"] [data-testid="stMetricValue"] {
             font-size: 1.85rem !important;
             line-height: 1.05 !important;
+            color: #e8e8f0 !important;
+            font-family: 'Space Mono', monospace !important;
         }
         div[data-testid="metric-container"] [data-testid="stMetricDelta"] {
             font-size: 0.78rem !important;
+            color: #FF5F00 !important;
         }
+
         .block-container {
             padding-top: 1.2rem;
             padding-bottom: 2rem;
             max-width: 1500px;
         }
+
         .dashboard-card {
-            background: rgba(16, 26, 44, 0.82);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(145deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 18px;
             padding: 18px 20px;
         }
+
         .compact-kpi-grid {
             display: grid;
             grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -171,195 +200,189 @@ def apply_fintech_theme() -> None:
             margin-bottom: 8px;
         }
         .compact-kpi-card {
-            background: rgba(16, 26, 44, 0.82);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(145deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 16px;
             padding: 12px 14px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
         }
+        .compact-kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #EB001B, #FF5F00, #F79E1B);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .compact-kpi-card:hover { border-color: rgba(255,95,0,0.3); transform: translateY(-2px); }
+        .compact-kpi-card:hover::before { opacity: 1; }
         .compact-kpi-label {
-            color: #9cb0d8;
+            color: #888;
             font-size: 0.8rem;
             margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
         }
         .compact-kpi-value {
-            color: #f5f9ff;
+            color: #e8e8f0;
             font-size: 1.25rem;
             font-weight: 650;
             line-height: 1.25;
             margin-bottom: 8px;
             word-break: break-word;
+            font-family: 'Space Mono', monospace;
         }
         .compact-kpi-delta {
-            color: #ff9b9b;
+            color: #FF5F00;
             font-size: 0.78rem;
             line-height: 1.3;
         }
+
         .dashboard-caption {
-            color: #91a4c7;
+            color: #888;
             font-size: 0.9rem;
             margin-top: -4px;
         }
+
         .hero-panel {
-            background: linear-gradient(135deg, rgba(20, 42, 76, 0.95), rgba(13, 24, 43, 0.98));
-            border: 1px solid rgba(94, 142, 255, 0.22);
+            background: linear-gradient(135deg, rgba(18,18,42,0.98), rgba(15,15,34,0.98));
+            border: 1px solid rgba(235,0,27,0.2);
             border-radius: 20px;
             padding: 22px 24px;
             margin-bottom: 0.75rem;
         }
         .hero-kicker {
-            color: #7ab8ff;
+            color: #FF5F00;
             font-size: 0.82rem;
             text-transform: uppercase;
             letter-spacing: 0.08em;
             margin-bottom: 10px;
+            font-weight: 600;
         }
         .hero-title {
-            color: #f5f9ff;
+            color: #e8e8f0;
             font-size: 1.7rem;
             font-weight: 700;
             margin-bottom: 6px;
         }
         .hero-subtitle {
-            color: #b2c4e3;
+            color: #aaa;
             font-size: 0.98rem;
             line-height: 1.55;
             margin-bottom: 16px;
         }
+
         .signal-chip-row {
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
         }
         .signal-chip {
-            background: rgba(53, 194, 255, 0.12);
-            border: 1px solid rgba(53, 194, 255, 0.22);
-            color: #dff5ff;
+            background: rgba(255,95,0,0.1);
+            border: 1px solid rgba(255,95,0,0.22);
+            color: #e8e8f0;
             border-radius: 999px;
             padding: 8px 12px;
             font-size: 0.86rem;
             line-height: 1.2;
         }
         .signal-chip.warning {
-            background: rgba(245, 166, 35, 0.12);
-            border-color: rgba(245, 166, 35, 0.28);
-            color: #ffe8bd;
+            background: rgba(247,158,27,0.12);
+            border-color: rgba(247,158,27,0.28);
+            color: #fde9b0;
         }
         .signal-chip.success {
-            background: rgba(255, 107, 107, 0.12);
-            border-color: rgba(255, 107, 107, 0.28);
-            color: #ffd6d6;
+            background: rgba(235,0,27,0.1);
+            border-color: rgba(235,0,27,0.25);
+            color: #ffccd0;
         }
+
         .section-card {
-            background: rgba(14, 24, 42, 0.82);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(145deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 18px;
             padding: 16px 18px;
         }
+        .section-card ul { padding-left: 18px; margin: 8px 0 0 0; }
+        .section-card li { color: #aaa; font-size: 0.93rem; line-height: 1.8; }
+
         .reason-card {
-            background: rgba(14, 24, 42, 0.88);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(145deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 18px;
             padding: 16px 18px;
             min-height: 132px;
         }
-        .reason-card.success {
-            border-color: rgba(255, 107, 107, 0.28);
-        }
-        .reason-card.warning {
-            border-color: rgba(245, 166, 35, 0.22);
-        }
-        .reason-card.info {
-            border-color: rgba(53, 194, 255, 0.22);
-        }
-        .reason-title {
-            color: #f5f9ff;
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 8px;
-        }
-        .reason-metric {
-            color: #ff9b9b;
-            font-size: 0.86rem;
-            font-weight: 600;
-            margin-bottom: 8px;
-        }
-        .reason-card.warning .reason-metric {
-            color: #ffd48a;
-        }
-        .reason-card.info .reason-metric {
-            color: #7ad7ff;
-        }
-        .reason-text {
-            color: #b2c4e3;
-            font-size: 0.93rem;
-            line-height: 1.5;
-        }
+        .reason-card.success { border-color: rgba(235,0,27,0.25); }
+        .reason-card.warning { border-color: rgba(247,158,27,0.22); }
+        .reason-card.info    { border-color: rgba(255,95,0,0.22); }
+        .reason-title { color: #e8e8f0; font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+        .reason-metric { color: #EB001B; font-size: 0.86rem; font-weight: 600; margin-bottom: 8px; font-family: 'Space Mono', monospace; }
+        .reason-card.warning .reason-metric { color: #F79E1B; }
+        .reason-card.info    .reason-metric { color: #FF5F00; }
+        .reason-text { color: #aaa; font-size: 0.93rem; line-height: 1.5; }
+
         .card-page-hero {
-            background: linear-gradient(135deg, rgba(20, 42, 76, 0.95), rgba(13, 24, 43, 0.98));
-            border: 1px solid rgba(94, 142, 255, 0.22);
+            background: linear-gradient(135deg, rgba(18,18,42,0.98), rgba(15,15,34,0.98));
+            border: 1px solid rgba(235,0,27,0.18);
             border-radius: 20px;
             padding: 22px 24px;
             margin-bottom: 1rem;
         }
-        .card-page-title {
-            color: #f5f9ff;
-            font-size: 1.65rem;
-            font-weight: 700;
-            margin: 0 0 6px 0;
-        }
-        .card-page-subtitle {
-            color: #b2c4e3;
-            font-size: 0.96rem;
-            line-height: 1.5;
-            margin: 0;
-        }
+        .card-page-title { color: #e8e8f0; font-size: 1.65rem; font-weight: 700; margin: 0 0 6px 0; }
+        .card-page-subtitle { color: #aaa; font-size: 0.96rem; line-height: 1.5; margin: 0; }
+
         .card-score-panel {
-            background: linear-gradient(160deg, rgba(18, 36, 68, 0.96), rgba(12, 22, 40, 0.98));
-            border: 1px solid rgba(94, 142, 255, 0.24);
+            background: linear-gradient(160deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 20px;
             padding: 20px 22px;
             margin-bottom: 0.5rem;
         }
         .card-score-panel.pattern {
-            border-color: rgba(245, 166, 35, 0.35);
-            box-shadow: 0 0 0 1px rgba(245, 166, 35, 0.08) inset;
+            border-color: rgba(235,0,27,0.35);
+            box-shadow: 0 0 0 1px rgba(235,0,27,0.08) inset;
+            animation: pulse 3s infinite;
         }
         .card-score-number {
-            color: #f5f9ff;
+            color: #e8e8f0;
             font-size: 2.35rem;
             font-weight: 750;
             line-height: 1;
             margin: 4px 0 10px 0;
+            font-family: 'Space Mono', monospace;
         }
-        .card-score-caption {
-            color: #9cb0d8;
-            font-size: 0.84rem;
-            margin-bottom: 4px;
-        }
+        .card-score-caption { color: #888; font-size: 0.84rem; margin-bottom: 4px; }
         .card-id-line {
-            color: #dfe9ff;
+            color: #e8e8f0;
             font-size: 1.02rem;
             font-weight: 600;
-            letter-spacing: 0.02em;
+            letter-spacing: 0.1em;
             margin-bottom: 2px;
+            font-family: 'Space Mono', monospace;
         }
         .card-status-pill {
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
             border-radius: 999px;
-            padding: 6px 12px;
+            padding: 5px 12px;
             font-size: 0.8rem;
             font-weight: 600;
             margin-bottom: 12px;
         }
         .card-status-pill.pattern {
-            background: rgba(245, 166, 35, 0.14);
-            border: 1px solid rgba(245, 166, 35, 0.32);
-            color: #ffe8bd;
+            background: rgba(235,0,27,0.12);
+            border: 1px solid rgba(235,0,27,0.3);
+            color: #ff8080;
         }
         .card-status-pill.regular {
-            background: rgba(53, 194, 255, 0.12);
-            border: 1px solid rgba(53, 194, 255, 0.24);
-            color: #dff5ff;
+            background: rgba(45,159,63,0.12);
+            border: 1px solid rgba(45,159,63,0.3);
+            color: #7fff99;
         }
         .card-mini-metrics {
             display: grid;
@@ -368,32 +391,22 @@ def apply_fintech_theme() -> None:
             margin-top: 14px;
         }
         .card-mini-metric {
-            background: rgba(8, 14, 26, 0.55);
-            border: 1px solid rgba(255, 255, 255, 0.07);
+            background: rgba(10,10,20,0.55);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 14px;
             padding: 10px 12px;
         }
-        .card-mini-metric-label {
-            color: #91a4c7;
-            font-size: 0.76rem;
-            margin-bottom: 4px;
-        }
+        .card-mini-metric-label { color: #666; font-size: 0.76rem; margin-bottom: 4px; }
         .card-mini-metric-value {
-            color: #f5f9ff;
+            color: #e8e8f0;
             font-size: 1rem;
             font-weight: 650;
+            font-family: 'Space Mono', monospace;
         }
-        .section-heading {
-            color: #f5f9ff;
-            font-size: 1.05rem;
-            font-weight: 650;
-            margin: 0 0 0.35rem 0;
-        }
-        .section-hint {
-            color: #91a4c7;
-            font-size: 0.86rem;
-            margin: 0 0 0.75rem 0;
-        }
+
+        .section-heading { color: #e8e8f0; font-size: 1.05rem; font-weight: 650; margin: 0 0 0.35rem 0; }
+        .section-hint    { color: #888; font-size: 0.86rem; margin: 0 0 0.75rem 0; }
+
         .card-kpi-grid {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -401,167 +414,159 @@ def apply_fintech_theme() -> None:
             margin: 0.75rem 0 1.1rem 0;
         }
         .card-kpi-card {
-            background: rgba(16, 26, 44, 0.9);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(145deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 16px;
             padding: 14px 16px;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
         }
-        .card-kpi-label {
-            color: #91a4c7;
-            font-size: 0.8rem;
-            margin-bottom: 8px;
+        .card-kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #EB001B, #FF5F00, #F79E1B);
+            opacity: 0;
+            transition: opacity 0.3s;
         }
+        .card-kpi-card:hover { border-color: rgba(255,95,0,0.3); transform: translateY(-2px); }
+        .card-kpi-card:hover::before { opacity: 1; }
+        .card-kpi-label { color: #888; font-size: 0.8rem; margin-bottom: 8px; }
         .card-kpi-value {
-            color: #f5f9ff;
+            color: #e8e8f0;
             font-size: 1.55rem;
             font-weight: 700;
             line-height: 1.1;
             margin-bottom: 6px;
+            font-family: 'Space Mono', monospace;
         }
-        .card-kpi-delta {
-            color: #ff9b9b;
-            font-size: 0.78rem;
-        }
+        .card-kpi-delta { color: #FF5F00; font-size: 0.78rem; }
+
         .panel-card {
-            background: rgba(14, 24, 42, 0.88);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: linear-gradient(145deg, #12122a, #0f0f22);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 18px;
             padding: 16px 18px;
         }
-        .merchant-list {
-            display: flex;
-            flex-direction: column;
-            gap: 0;
-        }
+
+        .merchant-list { display: flex; flex-direction: column; gap: 0; }
         .merchant-row {
             display: grid;
             grid-template-columns: 44px 1fr auto;
             gap: 14px;
             align-items: center;
             padding: 14px 4px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            border-bottom: 1px solid rgba(255,255,255,0.04);
         }
-        .merchant-row:last-child {
-            border-bottom: none;
-        }
+        .merchant-row:last-child { border-bottom: none; }
         .merchant-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.78rem;
-            font-weight: 700;
-            color: #f5f9ff;
+            width: 40px; height: 40px; border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.78rem; font-weight: 700; color: #fff;
         }
-        .merchant-icon.tone-0 { background: #2f80ed; }
-        .merchant-icon.tone-1 { background: #e74c3c; }
-        .merchant-icon.tone-2 { background: #f5a623; }
-        .merchant-icon.tone-3 { background: #eb5757; }
-        .merchant-icon.tone-4 { background: #4f5d75; }
-        .merchant-name {
-            color: #f5f9ff;
-            font-size: 0.95rem;
-            font-weight: 650;
-            margin-bottom: 4px;
-        }
-        .merchant-meta {
-            color: #91a4c7;
-            font-size: 0.8rem;
-        }
+        .merchant-icon.tone-0 { background: linear-gradient(135deg, #EB001B, #FF5F00); }
+        .merchant-icon.tone-1 { background: linear-gradient(135deg, #FF5F00, #F79E1B); }
+        .merchant-icon.tone-2 { background: linear-gradient(135deg, rgba(247,158,27,0.7), #F79E1B); }
+        .merchant-icon.tone-3 { background: linear-gradient(135deg, rgba(235,0,27,0.7), #EB001B); }
+        .merchant-icon.tone-4 { background: rgba(255,255,255,0.1); }
+        .merchant-name { color: #e8e8f0; font-size: 0.95rem; font-weight: 650; margin-bottom: 4px; }
+        .merchant-meta { color: #666; font-size: 0.8rem; }
         .merchant-amount {
-            color: #f5f9ff;
-            font-size: 0.98rem;
-            font-weight: 700;
-            white-space: nowrap;
+            color: #e8e8f0; font-size: 0.98rem; font-weight: 700;
+            white-space: nowrap; font-family: 'Space Mono', monospace;
         }
-        .geo-list {
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
-            padding-top: 4px;
-        }
-        .geo-row {
-            display: grid;
-            grid-template-columns: 88px 1fr auto;
-            gap: 12px;
-            align-items: center;
-        }
-        .geo-country {
-            color: #dfe9ff;
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-        .geo-bar-wrap {
-            height: 10px;
-            background: rgba(255, 255, 255, 0.06);
-            border-radius: 999px;
-            overflow: hidden;
-        }
-        .geo-bar {
-            height: 100%;
-            border-radius: 999px;
-        }
-        .geo-bar.tone-0 { background: #2f80ed; }
-        .geo-bar.tone-1 { background: #35c2ff; }
-        .geo-bar.tone-2 { background: #f5a623; }
+
+        .geo-list { display: flex; flex-direction: column; gap: 14px; padding-top: 4px; }
+        .geo-row { display: grid; grid-template-columns: 88px 1fr auto; gap: 12px; align-items: center; }
+        .geo-country { color: #e8e8f0; font-size: 0.9rem; font-weight: 600; }
+        .geo-bar-wrap { height: 10px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+        .geo-bar { height: 100%; border-radius: 999px; }
+        .geo-bar.tone-0 { background: linear-gradient(90deg, #EB001B, #FF5F00); }
+        .geo-bar.tone-1 { background: linear-gradient(90deg, #FF5F00, #F79E1B); }
+        .geo-bar.tone-2 { background: #F79E1B; }
         .geo-amount {
-            color: #f5f9ff;
-            font-size: 0.88rem;
-            font-weight: 650;
-            min-width: 72px;
-            text-align: right;
+            color: #e8e8f0; font-size: 0.88rem; font-weight: 650;
+            min-width: 72px; text-align: right; font-family: 'Space Mono', monospace;
         }
-        .chart-card-title {
-            color: #f5f9ff;
-            font-size: 0.98rem;
-            font-weight: 650;
-            margin: 0 0 2px 0;
-        }
-        .chart-card-subtitle {
-            color: #91a4c7;
-            font-size: 0.8rem;
-            margin: 0 0 10px 0;
-        }
-        [data-testid="stSidebar"] [data-testid="stRadio"] label p {
-            font-size: 0.95rem !important;
-        }
-        div[data-testid="stRadio"] {
-            margin-bottom: 0.75rem;
-        }
+
+        .chart-card-title { color: #e8e8f0; font-size: 0.98rem; font-weight: 650; margin: 0 0 2px 0; }
+        .chart-card-subtitle { color: #888; font-size: 0.8rem; margin: 0 0 10px 0; }
+
+        [data-testid="stSidebar"] [data-testid="stRadio"] label p { font-size: 0.95rem !important; }
+        div[data-testid="stRadio"] { margin-bottom: 0.75rem; }
+
         .sidebar-brand {
             display: flex;
             flex-direction: column;
             align-items: flex-start;
-            gap: 12px;
+            gap: 10px;
             padding: 8px 4px 22px 4px;
             margin-bottom: 0.25rem;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            border-bottom: 1px solid rgba(255,255,255,0.06);
         }
-        .mastercard-mark {
-            display: block;
-            width: 52px;
-            height: 32px;
-            overflow: visible;
-        }
+        .mastercard-mark { display: block; width: 52px; height: 32px; overflow: visible; }
         .sidebar-brand-title {
-            color: #f5f9ff;
+            color: #e8e8f0;
             font-size: 1.35rem;
             font-weight: 700;
             letter-spacing: 0.02em;
             line-height: 1;
             margin: 0;
         }
+        .sidebar-brand-subtitle {
+            color: #FF5F00;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
         [data-testid="stSidebar"] .stRadio > label {
-            color: #91a4c7 !important;
+            color: #888 !important;
             font-size: 0.82rem !important;
             text-transform: uppercase;
             letter-spacing: 0.06em;
         }
+
+        /* gauge */
+        .gauge-container {
+            display: flex; flex-direction: column; align-items: center;
+            justify-content: center; padding: 8px 0;
+        }
+        .gauge-label {
+            font-size: 10px; color: #888; margin-bottom: 6px;
+            text-transform: uppercase; letter-spacing: 0.12em; font-weight: 600;
+        }
+        .gauge-sublabel { margin-top: 8px; font-size: 13px; font-weight: 600; }
         </style>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def render_gauge_chart(value: float, size: int = 140) -> str:
+    radius = 60
+    circumference = math.pi * radius
+    offset = circumference - (value / 100) * circumference
+    if value > 75:
+        color = "#EB001B"
+    elif value > 40:
+        color = "#FF5F00"
+    else:
+        color = "#2D9F3F"
+    w = int(size * 1.6)
+    h = int(size * 0.65)
+    return (
+        f'<svg width="{w}" height="{h}" viewBox="0 0 160 100">'
+        f'<path d="M20 90 A60 60 0 0 1 140 90" fill="none" stroke="#1a1a2e" stroke-width="14" stroke-linecap="round"/>'
+        f'<path d="M20 90 A60 60 0 0 1 140 90" fill="none" stroke="{color}" stroke-width="14" stroke-linecap="round"'
+        f' stroke-dasharray="{circumference:.2f}" stroke-dashoffset="{offset:.2f}"/>'
+        f'<text x="80" y="78" text-anchor="middle" fill="white" font-size="26"'
+        f' font-family="Space Mono, monospace" font-weight="700">{value:.0f}%</text>'
+        f'</svg>'
     )
 
 
@@ -572,8 +577,12 @@ def render_sidebar_brand() -> None:
             '<svg class="mastercard-mark" viewBox="0 0 52 32" xmlns="http://www.w3.org/2000/svg" aria-label="Mastercard">'
             '<circle cx="19" cy="16" r="13" fill="#EB001B"/>'
             '<circle cx="33" cy="16" r="13" fill="#F79E1B"/>'
+            '<path d="M26 4.8a13.9 13.9 0 0 0-5 11.2A13.9 13.9 0 0 0 26 27.2a13.9 13.9 0 0 0 5-11.2A13.9 13.9 0 0 0 26 4.8z" fill="#FF5F00"/>'
             "</svg>"
+            "<div>"
             '<div class="sidebar-brand-title">Mastercard</div>'
+            '<div class="sidebar-brand-subtitle">Data Quest 2026</div>'
+            "</div>"
             "</div>"
         ),
         unsafe_allow_html=True,
@@ -652,25 +661,32 @@ def render_card_score_panel(
     confidence_text: str,
 ) -> None:
     status_class = "pattern" if is_pattern else "regular"
-    status_text = "Hidden entrepreneur pattern" if is_pattern else "Regular consumer profile"
+    alert_text = "⚠ ALERT" if is_pattern else "✓ OK"
+    status_color = "#EB001B" if is_pattern else "#2D9F3F"
+    gauge_html = render_gauge_chart(score_pct)
     st.markdown(
         (
             f'<div class="card-score-panel {status_class}">'
-            f'<span class="card-status-pill {status_class}">{escape(status_text)}</span>'
-            f'<div class="card-id-line">{escape(card_masked)}</div>'
-            f'<div class="card-score-caption">Hidden entrepreneur probability</div>'
-            f'<div class="card-score-number">{score_pct:.1f}%</div>'
+            f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">'
+            f'<span class="card-id-line">{escape(card_masked)}</span>'
+            f'</div>'
+            f'<span class="card-status-pill {status_class}">{alert_text}</span>'
+            f'<div class="gauge-container">'
+            f'<div class="gauge-label">Hidden entrepreneur probability</div>'
+            f'{gauge_html}'
+            f'<div class="gauge-sublabel" style="color:{status_color};">{escape(predicted_label)}</div>'
+            f'</div>'
             f'<div class="card-mini-metrics">'
             f'<div class="card-mini-metric">'
             f'<div class="card-mini-metric-label">Model class</div>'
             f'<div class="card-mini-metric-value">{escape(predicted_label)}</div>'
-            f"</div>"
+            f'</div>'
             f'<div class="card-mini-metric">'
             f'<div class="card-mini-metric-label">Confidence ({escape(confidence_text)})</div>'
             f'<div class="card-mini-metric-value">{confidence_pct:.1f}%</div>'
-            f"</div>"
-            f"</div>"
-            f"</div>"
+            f'</div>'
+            f'</div>'
+            f'</div>'
         ),
         unsafe_allow_html=True,
     )
